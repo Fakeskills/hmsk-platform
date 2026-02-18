@@ -205,3 +205,41 @@ DROP POLICY IF EXISTS tenant_isolation ON file_links;
 CREATE POLICY tenant_isolation ON file_links
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+-- Sprint 7 RLS
+ALTER TABLE timesheets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE time_entries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE compliance_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE compliance_results ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payroll_exports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE payroll_export_lines ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tenant_isolation ON timesheets;
+CREATE POLICY tenant_isolation ON timesheets
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON time_entries;
+CREATE POLICY tenant_isolation ON time_entries
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON compliance_rules;
+CREATE POLICY tenant_isolation ON compliance_rules
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON compliance_results;
+CREATE POLICY tenant_isolation ON compliance_results
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON payroll_exports;
+CREATE POLICY tenant_isolation ON payroll_exports
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON payroll_export_lines;
+CREATE POLICY tenant_isolation ON payroll_export_lines
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);

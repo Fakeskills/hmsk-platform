@@ -12,14 +12,16 @@ from app.core.nonconformance.router import router as nc_router
 from app.core.documents.router import router as documents_router
 from app.core.checklists.router import router as checklists_router
 from app.core.drawings.router import router as drawings_router
+from app.core.timesheets.router import router as timesheets_router
 from app.settings import get_settings
 
 settings = get_settings()
 
+
 def create_app() -> FastAPI:
     app = FastAPI(
         title="HMSK Platform API",
-        version="0.6.0",
+        version="0.7.0",
         docs_url="/docs" if settings.APP_DEBUG else None,
         redoc_url="/redoc" if settings.APP_DEBUG else None,
     )
@@ -42,11 +44,13 @@ def create_app() -> FastAPI:
     app.include_router(documents_router)
     app.include_router(checklists_router)
     app.include_router(drawings_router)
+    app.include_router(timesheets_router)
 
     @app.get("/health")
     async def health():
         return {"status": "ok"}
 
     return app
+
 
 app = create_app()

@@ -16,19 +16,24 @@ from app.core.nonconformance.models import Nonconformance, CapaAction  # noqa
 from app.core.documents.models import DocTemplate, DocTemplateVersion, ProjectDoc, ProjectDocVersion, AckRequest, AckResponse  # noqa
 from app.core.checklists.models import ChecklistTemplate, ChecklistTemplateVersion, ProjectChecklistTemplate, ProjectChecklistTemplateVersion, ChecklistRun  # noqa
 from app.core.drawings.models import Drawing  # noqa
+from app.core.timesheets.models import Timesheet, TimeEntry, ComplianceRule, ComplianceResult, PayrollExport, PayrollExportLine  # noqa
 
 config = context.config
 if config.config_file_name:
     fileConfig(config.config_file_name)
 target_metadata = Base.metadata
 
+
 def get_url() -> str:
     return os.environ.get("DATABASE_SYNC_URL", "postgresql+psycopg2://hmsk:changeme@localhost:5432/hmsk")
 
+
 def run_migrations_offline() -> None:
-    context.configure(url=get_url(), target_metadata=target_metadata, literal_binds=True, dialect_opts={"paramstyle": "named"})
+    context.configure(url=get_url(), target_metadata=target_metadata,
+                      literal_binds=True, dialect_opts={"paramstyle": "named"})
     with context.begin_transaction():
         context.run_migrations()
+
 
 def run_migrations_online() -> None:
     cfg = config.get_section(config.config_ini_section, {})
@@ -38,6 +43,7 @@ def run_migrations_online() -> None:
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()
+
 
 if context.is_offline_mode():
     run_migrations_offline()
