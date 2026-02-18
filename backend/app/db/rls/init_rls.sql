@@ -151,3 +151,35 @@ DROP POLICY IF EXISTS tenant_isolation ON ack_responses;
 CREATE POLICY tenant_isolation ON ack_responses
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+-- Sprint 5 RLS
+ALTER TABLE checklist_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE checklist_template_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_checklist_templates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE project_checklist_template_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE checklist_runs ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tenant_isolation ON checklist_templates;
+CREATE POLICY tenant_isolation ON checklist_templates
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON checklist_template_versions;
+CREATE POLICY tenant_isolation ON checklist_template_versions
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON project_checklist_templates;
+CREATE POLICY tenant_isolation ON project_checklist_templates
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON project_checklist_template_versions;
+CREATE POLICY tenant_isolation ON project_checklist_template_versions
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON checklist_runs;
+CREATE POLICY tenant_isolation ON checklist_runs
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
