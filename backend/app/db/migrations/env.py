@@ -10,6 +10,9 @@ from app.core.audit.models import AuditLog  # noqa
 from app.core.projects.models import Project, ProjectSequence  # noqa
 from app.core.inbox.models import MessageThread, IncomingMessage, IncomingAttachment  # noqa
 from app.core.tasks.models import Task  # noqa
+from app.core.files.models import File, FileLink  # noqa
+from app.core.incidents.models import Incident, IncidentMessage  # noqa
+from app.core.nonconformance.models import Nonconformance, CapaAction  # noqa
 
 config = context.config
 if config.config_file_name:

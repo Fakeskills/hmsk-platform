@@ -75,3 +75,41 @@ DROP POLICY IF EXISTS tenant_isolation ON tasks;
 CREATE POLICY tenant_isolation ON tasks
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+-- Sprint 3 RLS
+ALTER TABLE files ENABLE ROW LEVEL SECURITY;
+ALTER TABLE file_links ENABLE ROW LEVEL SECURITY;
+ALTER TABLE incidents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE incident_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE nonconformances ENABLE ROW LEVEL SECURITY;
+ALTER TABLE capa_actions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tenant_isolation ON files;
+CREATE POLICY tenant_isolation ON files
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON file_links;
+CREATE POLICY tenant_isolation ON file_links
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON incidents;
+CREATE POLICY tenant_isolation ON incidents
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON incident_messages;
+CREATE POLICY tenant_isolation ON incident_messages
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON nonconformances;
+CREATE POLICY tenant_isolation ON nonconformances
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON capa_actions;
+CREATE POLICY tenant_isolation ON capa_actions
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
