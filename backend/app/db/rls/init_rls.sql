@@ -37,3 +37,41 @@ CREATE POLICY tenant_isolation ON audit_log
         tenant_id IS NULL
         OR tenant_id = current_setting('app.tenant_id', true)::uuid
     );
+
+-- Sprint 2 RLS
+ALTER TABLE project_sequences ENABLE ROW LEVEL SECURITY;
+ALTER TABLE projects ENABLE ROW LEVEL SECURITY;
+ALTER TABLE message_threads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE incoming_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE incoming_attachments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tenant_isolation ON project_sequences;
+CREATE POLICY tenant_isolation ON project_sequences
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON projects;
+CREATE POLICY tenant_isolation ON projects
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON message_threads;
+CREATE POLICY tenant_isolation ON message_threads
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON incoming_messages;
+CREATE POLICY tenant_isolation ON incoming_messages
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON incoming_attachments;
+CREATE POLICY tenant_isolation ON incoming_attachments
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON tasks;
+CREATE POLICY tenant_isolation ON tasks
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
