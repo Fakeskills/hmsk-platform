@@ -11,8 +11,62 @@ from app.core.documents.models import (
 from app.core.documents.schemas import (
     DocTemplateCreate, DocTemplateVersionCreate,
     ProjectDocCreate, ProjectDocVersionCreate,
+    ProjectDocVersionUpdate, DocTemplateVersionUpdate,
     AckResponseCreate, IssueRequest,
 )
+
+
+# ── Permission helpers ────────────────────────────────────────────────────────
+
+PERMISSION_DOC_PUBLISH = "doc_template:publish"
+
+
+async def _has_permission(
+    db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID, permission: str
+) -> bool:
+    """
+    Check if user has a role with the given permission string.
+    Permissions stored as comma-separated TEXT in roles.permissions.
+    Also grants to superadmin unconditionally.
+    """
+    from app.core.rbac.models import User, Role, UserRoleAssignment
+    # Check superadmin
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user and user.is_superadmin:
+        return True
+    # Check role permissions
+    result = await db.execute(
+        select(Role.permissions)
+        .join(UserRoleAssignment, UserRoleAssignment.role_id == Role.id)
+        .where(
+            UserRoleAssignment.tenant_id == tenant_id,
+            UserRoleAssignment.user_id == user_id,
+            Role.is_deleted == False,
+        )
+    )
+    for (perms,) in result.all():
+        if perms and permission in [p.strip() for p in perms.split(",")]:
+            return True
+    return False
+
+
+# ── Immutability guards ───────────────────────────────────────────────────────
+
+def _assert_template_version_mutable(version: DocTemplateVersion) -> None:
+    from fastapi import HTTPException
+    if version.status == "published":
+        raise HTTPException(400, "Published template versions are immutable and cannot be edited")
+    if version.status == "superseded":
+        raise HTTPException(400, "Superseded template versions are immutable")
+
+
+def _assert_doc_version_mutable(version: ProjectDocVersion) -> None:
+    from fastapi import HTTPException
+    if version.status == "issued":
+        raise HTTPException(400, "Issued document versions are immutable and cannot be edited")
+    if version.status == "superseded":
+        raise HTTPException(400, "Superseded document versions are immutable")
 
 
 # ── Library ───────────────────────────────────────────────────────────────────
@@ -36,7 +90,8 @@ async def get_template(db: AsyncSession, template_id: uuid.UUID) -> DocTemplate 
 
 async def list_templates(db: AsyncSession, tenant_id: uuid.UUID) -> list[DocTemplate]:
     result = await db.execute(
-        select(DocTemplate).where(DocTemplate.tenant_id == tenant_id, DocTemplate.is_deleted == False)
+        select(DocTemplate)
+        .where(DocTemplate.tenant_id == tenant_id, DocTemplate.is_deleted == False)
         .order_by(DocTemplate.created_at.desc())
     )
     return list(result.scalars().all())
@@ -64,14 +119,31 @@ async def create_template_version(
     return v
 
 
+async def update_template_version(
+    db: AsyncSession, version: DocTemplateVersion, data: DocTemplateVersionUpdate
+) -> DocTemplateVersion:
+    _assert_template_version_mutable(version)
+    for field, value in data.model_dump(exclude_none=True).items():
+        setattr(version, field, value)
+    await db.flush()
+    await db.refresh(version)
+    return version
+
+
 async def publish_template_version(
-    db: AsyncSession, version: DocTemplateVersion, published_by: uuid.UUID, tenant_id: uuid.UUID
+    db: AsyncSession,
+    version: DocTemplateVersion,
+    published_by: uuid.UUID,
+    tenant_id: uuid.UUID,
 ) -> DocTemplateVersion:
     from fastapi import HTTPException
+    # Permission check
+    if not await _has_permission(db, tenant_id, published_by, PERMISSION_DOC_PUBLISH):
+        raise HTTPException(403, "Permission denied: doc_template:publish required (HMSK-leder role)")
     if version.status != "draft":
         raise HTTPException(400, f"Cannot publish version with status '{version.status}'")
 
-    # Supersede previous published version
+    # Supersede previous published versions
     result = await db.execute(
         select(DocTemplateVersion).where(
             DocTemplateVersion.template_id == version.template_id,
@@ -86,7 +158,6 @@ async def publish_template_version(
     version.published_at = datetime.now(timezone.utc)
     version.published_by = published_by
 
-    # Update template status
     result = await db.execute(
         select(DocTemplate).where(DocTemplate.id == version.template_id)
     )
@@ -109,18 +180,30 @@ async def publish_template_version(
 # ── Project docs ──────────────────────────────────────────────────────────────
 
 async def generate_doc_no(
-    db: AsyncSession, tenant_id: uuid.UUID, project_id: uuid.UUID
+    db: AsyncSession, tenant_id: uuid.UUID, project_id: uuid.UUID, category: str
 ) -> str:
+    """
+    Format: {PREFIX}-{YY}-{####}
+    HMS-26-0001, MILJO-26-0001, KVAL-26-0001, DOC-26-0001
+    """
     year = datetime.now(timezone.utc).year
     yy = str(year)[-2:]
+    prefix_map = {
+        "HMS": "HMS",
+        "MILJO": "MILJO",
+        "KVALITET": "KVAL",
+        "ANNET": "DOC",
+    }
+    prefix = prefix_map.get(category, "DOC")
     result = await db.execute(
         select(func.count(ProjectDoc.id)).where(
             ProjectDoc.tenant_id == tenant_id,
             ProjectDoc.project_id == project_id,
+            ProjectDoc.category == category,
         )
     )
     count = result.scalar_one() or 0
-    return f"DOC-{yy}-{count + 1:04d}"
+    return f"{prefix}-{yy}-{count + 1:04d}"
 
 
 async def create_project_doc(
@@ -130,29 +213,39 @@ async def create_project_doc(
     data: ProjectDocCreate,
     owner_user_id: uuid.UUID,
 ) -> tuple[ProjectDoc, ProjectDocVersion]:
-    # Resolve template linkage
     template_id = None
+    source_template_version_id = None
     content = data.content
 
+    # Freeze copy from library template version
     if data.template_version_id:
         result = await db.execute(
-            select(DocTemplateVersion).where(DocTemplateVersion.id == data.template_version_id)
+            select(DocTemplateVersion).where(
+                DocTemplateVersion.id == data.template_version_id,
+                DocTemplateVersion.is_deleted == False,
+            )
         )
         tv = result.scalar_one_or_none()
         if tv:
+            if tv.status != "published":
+                from fastapi import HTTPException
+                raise HTTPException(400, "Can only import published template versions")
             template_id = tv.template_id
+            source_template_version_id = tv.id
+            # Freeze copy: use template content if no override provided
             if content is None:
                 content = tv.content
 
-    doc_no = await generate_doc_no(db, tenant_id, project_id)
+    doc_no = await generate_doc_no(db, tenant_id, project_id, data.category)
     doc = ProjectDoc(
         tenant_id=tenant_id,
         project_id=project_id,
         template_id=template_id,
-        template_version_id=data.template_version_id,
+        source_template_version_id=source_template_version_id,
         title=data.title,
         doc_no=doc_no,
         doc_type=data.doc_type,
+        category=data.category,
         status="draft",
         owner_user_id=owner_user_id,
     )
@@ -201,8 +294,8 @@ async def create_doc_version(
     data: ProjectDocVersionCreate,
 ) -> ProjectDocVersion:
     from fastapi import HTTPException
-    if doc.status == "issued":
-        raise HTTPException(400, "Cannot add version to issued document")
+    if doc.status in ("issued", "superseded"):
+        raise HTTPException(400, f"Cannot add version to document with status '{doc.status}'")
 
     result = await db.execute(
         select(func.max(ProjectDocVersion.version_no))
@@ -225,18 +318,28 @@ async def create_doc_version(
     return v
 
 
+async def update_doc_version(
+    db: AsyncSession, version: ProjectDocVersion, data: ProjectDocVersionUpdate
+) -> ProjectDocVersion:
+    _assert_doc_version_mutable(version)
+    for field, value in data.model_dump(exclude_none=True).items():
+        setattr(version, field, value)
+    await db.flush()
+    await db.refresh(version)
+    return version
+
+
 async def get_doc_version(db: AsyncSession, version_id: uuid.UUID) -> ProjectDocVersion | None:
     result = await db.execute(
         select(ProjectDocVersion).where(
-            ProjectDocVersion.id == version_id, ProjectDocVersion.is_deleted == False
+            ProjectDocVersion.id == version_id,
+            ProjectDocVersion.is_deleted == False,
         )
     )
     return result.scalar_one_or_none()
 
 
-async def list_doc_versions(
-    db: AsyncSession, doc_id: uuid.UUID
-) -> list[ProjectDocVersion]:
+async def list_doc_versions(db: AsyncSession, doc_id: uuid.UUID) -> list[ProjectDocVersion]:
     result = await db.execute(
         select(ProjectDocVersion).where(
             ProjectDocVersion.doc_id == doc_id,
@@ -253,14 +356,13 @@ async def approve_doc_version(
     tenant_id: uuid.UUID,
 ) -> ProjectDocVersion:
     from fastapi import HTTPException
+    _assert_doc_version_mutable(version)
     if version.status not in ("draft", "under_review"):
         raise HTTPException(400, f"Cannot approve version with status '{version.status}'")
-
     version.status = "approved"
     version.approved_at = datetime.now(timezone.utc)
     version.approved_by = approved_by
     await db.flush()
-
     from app.core.audit.service import audit
     await audit(db, tenant_id=tenant_id, user_id=approved_by,
         action="project_doc.approved", resource_type="project_doc_version",
@@ -284,7 +386,7 @@ async def issue_doc_version(
 
     now = datetime.now(timezone.utc)
 
-    # Supersede previous issued version
+    # Supersede previous issued versions
     result = await db.execute(
         select(ProjectDocVersion).where(
             ProjectDocVersion.doc_id == version.doc_id,
@@ -301,9 +403,7 @@ async def issue_doc_version(
     await db.flush()
 
     # Update parent doc status
-    result = await db.execute(
-        select(ProjectDoc).where(ProjectDoc.id == version.doc_id)
-    )
+    result = await db.execute(select(ProjectDoc).where(ProjectDoc.id == version.doc_id))
     doc = result.scalar_one_or_none()
     if doc:
         doc.status = "issued"
@@ -320,7 +420,6 @@ async def issue_doc_version(
             ))
 
     await db.flush()
-
     from app.core.audit.service import audit
     await audit(db, tenant_id=tenant_id, user_id=issued_by,
         action="project_doc.issued", resource_type="project_doc_version",

@@ -1,6 +1,9 @@
 import uuid
 from datetime import datetime
 from pydantic import BaseModel, Field
+from typing import Literal
+
+VALID_CATEGORIES = Literal["HMS", "MILJO", "KVALITET", "ANNET"]
 
 
 # ── Library ───────────────────────────────────────────────────────────────────
@@ -9,6 +12,7 @@ class DocTemplateCreate(BaseModel):
     title: str = Field(..., max_length=500)
     description: str | None = None
     doc_type: str = "procedure"
+    category: VALID_CATEGORIES = "ANNET"
 
 
 class DocTemplateRead(BaseModel):
@@ -18,12 +22,18 @@ class DocTemplateRead(BaseModel):
     title: str
     description: str | None
     doc_type: str
+    category: str
     status: str
     created_by: uuid.UUID | None
     created_at: datetime
 
 
 class DocTemplateVersionCreate(BaseModel):
+    content: str | None = None
+    change_summary: str | None = None
+
+
+class DocTemplateVersionUpdate(BaseModel):
     content: str | None = None
     change_summary: str | None = None
 
@@ -47,6 +57,7 @@ class DocTemplateVersionRead(BaseModel):
 class ProjectDocCreate(BaseModel):
     title: str = Field(..., max_length=500)
     doc_type: str = "procedure"
+    category: VALID_CATEGORIES = "ANNET"
     template_version_id: uuid.UUID | None = None
     content: str | None = None
 
@@ -57,10 +68,11 @@ class ProjectDocRead(BaseModel):
     tenant_id: uuid.UUID
     project_id: uuid.UUID
     template_id: uuid.UUID | None
-    template_version_id: uuid.UUID | None
+    source_template_version_id: uuid.UUID | None
     title: str
     doc_no: str
     doc_type: str
+    category: str
     status: str
     owner_user_id: uuid.UUID | None
     created_at: datetime
@@ -70,6 +82,12 @@ class ProjectDocVersionCreate(BaseModel):
     content: str | None = None
     change_summary: str | None = None
     requires_ack: bool = False
+
+
+class ProjectDocVersionUpdate(BaseModel):
+    content: str | None = None
+    change_summary: str | None = None
+    requires_ack: bool | None = None
 
 
 class ProjectDocVersionRead(BaseModel):
@@ -122,5 +140,4 @@ class AckReportRow(BaseModel):
 
 
 class IssueRequest(BaseModel):
-    """Body for POST /doc-versions/{id}/issue"""
     ack_user_ids: list[uuid.UUID] = Field(default_factory=list)
