@@ -15,7 +15,7 @@ router = APIRouter(tags=["projects"])
 
 @router.post("/projects", response_model=ProjectRead, status_code=201)
 async def create_project(data: ProjectCreate, db: AsyncSession = Depends(get_db), current: CurrentUser = Depends(get_current_user)):
-    return await service.create_project(db, current.tenant_id, data)
+    return await service.create_project(db, current.tenant_id, data, current.user_id)
 
 @router.get("/projects", response_model=list[ProjectRead])
 async def list_projects(db: AsyncSession = Depends(get_db), current: CurrentUser = Depends(get_current_user)):

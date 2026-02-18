@@ -6,6 +6,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.drawings.models import Drawing
 from app.core.drawings.schemas import DrawingCreate, DrawingFromInboxRequest
 
+IMMUTABLE_DRAWING_STATUSES = {"superseded", "void"}
+
+
+def _assert_drawing_not_superseded(drawing: Drawing) -> None:
+    """Superseded and void drawings cannot be re-activated or modified."""
+    from fastapi import HTTPException
+    if drawing.status in IMMUTABLE_DRAWING_STATUSES:
+        raise HTTPException(
+            400,
+            f"Drawing '{drawing.drawing_no}' rev '{drawing.revision}' is '{drawing.status}' "
+            f"and cannot be modified. Register a new revision instead."
+        )
+
 
 async def register_drawing(
     db: AsyncSession,
@@ -39,6 +52,7 @@ async def register_drawing(
                     400,
                     f"Drawing {data.drawing_no} revision {data.revision} already exists and is active"
                 )
+            # Guard: existing active can be superseded only by a NEW revision
             existing.status = "superseded"
             supersedes_id = existing.id
             await db.flush()
@@ -100,7 +114,6 @@ async def register_from_inbox(
     from fastapi import HTTPException
     from app.core.inbox.models import IncomingMessage
 
-    # Resolve source message + thread
     result = await db.execute(
         select(IncomingMessage).where(
             IncomingMessage.id == data.message_id,
@@ -128,7 +141,6 @@ async def register_from_inbox(
         source_message_id=message.id,
     )
 
-    # Optionally close thread + tasks
     if data.close_thread_on_register and message.thread_id:
         from app.core.inbox.service import close_thread
         await close_thread(db, tenant_id, message.thread_id)

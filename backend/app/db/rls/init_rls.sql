@@ -191,3 +191,17 @@ DROP POLICY IF EXISTS tenant_isolation ON drawings;
 CREATE POLICY tenant_isolation ON drawings
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+-- Hardening patch v1 – files + file_links RLS
+ALTER TABLE files ENABLE ROW LEVEL SECURITY;
+ALTER TABLE file_links ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tenant_isolation ON files;
+CREATE POLICY tenant_isolation ON files
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+DROP POLICY IF EXISTS tenant_isolation ON file_links;
+CREATE POLICY tenant_isolation ON file_links
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);

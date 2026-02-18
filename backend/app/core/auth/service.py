@@ -46,6 +46,17 @@ class LocalAuthProvider:
             expires_at=datetime.now(timezone.utc) + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
         ))
         await db.flush()
+
+        # Fix #3 – audit login
+        from app.core.audit.service import audit
+        await audit(
+            db, tenant_id=tenant.id, user_id=user.id,
+            action="auth.login",
+            resource_type="user",
+            resource_id=str(user.id),
+            detail={"email": user.email},
+        )
+
         return AuthResult(access_token=access_token, refresh_token=raw_refresh)
 
 

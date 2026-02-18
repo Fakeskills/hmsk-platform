@@ -25,17 +25,11 @@ async def _has_permission(
     db: AsyncSession, tenant_id: uuid.UUID, user_id: uuid.UUID, permission: str
 ) -> bool:
     """
-    Check if user has a role with the given permission string.
+    Fix #4 – Pure permission-based check for business actions.
+    No is_superadmin bypass. Role must explicitly have the permission string.
     Permissions stored as comma-separated TEXT in roles.permissions.
-    Also grants to superadmin unconditionally.
     """
-    from app.core.rbac.models import User, Role, UserRoleAssignment
-    # Check superadmin
-    result = await db.execute(select(User).where(User.id == user_id))
-    user = result.scalar_one_or_none()
-    if user and user.is_superadmin:
-        return True
-    # Check role permissions
+    from app.core.rbac.models import Role, UserRoleAssignment
     result = await db.execute(
         select(Role.permissions)
         .join(UserRoleAssignment, UserRoleAssignment.role_id == Role.id)
