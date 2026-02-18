@@ -15,6 +15,7 @@ from app.core.incidents.models import Incident, IncidentMessage  # noqa
 from app.core.nonconformance.models import Nonconformance, CapaAction  # noqa
 from app.core.documents.models import DocTemplate, DocTemplateVersion, ProjectDoc, ProjectDocVersion, AckRequest, AckResponse  # noqa
 from app.core.checklists.models import ChecklistTemplate, ChecklistTemplateVersion, ProjectChecklistTemplate, ProjectChecklistTemplateVersion, ChecklistRun  # noqa
+from app.core.drawings.models import Drawing  # noqa
 
 config = context.config
 if config.config_file_name:

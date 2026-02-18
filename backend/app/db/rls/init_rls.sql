@@ -183,3 +183,11 @@ DROP POLICY IF EXISTS tenant_isolation ON checklist_runs;
 CREATE POLICY tenant_isolation ON checklist_runs
     USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
     WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
+
+-- Sprint 6 RLS
+ALTER TABLE drawings ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS tenant_isolation ON drawings;
+CREATE POLICY tenant_isolation ON drawings
+    USING (tenant_id = current_setting('app.tenant_id', true)::uuid)
+    WITH CHECK (tenant_id = current_setting('app.tenant_id', true)::uuid);
