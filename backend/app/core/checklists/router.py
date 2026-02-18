@@ -13,8 +13,10 @@ from app.core.checklists.schemas import (
     ChecklistRunSubmit, ChecklistRunReject,
 )
 from app.core.checklists.models import (
-    ChecklistTemplateVersion, ProjectChecklistTemplateVersion, ChecklistRun
+    ChecklistTemplateVersion, ProjectChecklistTemplateVersion,
 )
+from app.core.files.schemas import FileCreate
+from app.core.files.service import create_file
 from app.dependencies import get_db, get_current_user, CurrentUser
 
 router = APIRouter(tags=["checklists"])
@@ -95,7 +97,7 @@ async def import_checklist(
     current: CurrentUser = Depends(get_current_user),
 ):
     checklist, _ = await service.import_checklist_to_project(
-        db, current.tenant_id, project_id, data
+        db, current.tenant_id, project_id, data, current.user_id
     )
     return checklist
 
@@ -182,6 +184,24 @@ async def update_run(
     if not run:
         raise HTTPException(404, "Run not found")
     return await service.update_run_answers(db, run, data)
+
+
+@router.post("/checklist-runs/{run_id}/files", status_code=201)
+async def attach_file_to_run(
+    run_id: uuid.UUID,
+    data: FileCreate,
+    db: AsyncSession = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+):
+    """Fix #5 – attach image file to run via file_links."""
+    run = await service.get_run(db, run_id)
+    if not run:
+        raise HTTPException(404, "Run not found")
+    if run.status != "open":
+        raise HTTPException(400, "Cannot attach files to a non-open run")
+    f = await create_file(db, current.tenant_id, data, current.user_id)
+    await service.attach_image_to_run(db, current.tenant_id, run, f.id)
+    return {"file_id": f.id, "filename": f.filename}
 
 
 @router.post("/checklist-runs/{run_id}/submit", response_model=ChecklistRunRead)

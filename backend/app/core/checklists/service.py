@@ -17,6 +17,10 @@ from app.core.checklists.schemas import (
 
 PERMISSION_CHECKLIST_PUBLISH = "checklist_template:publish"
 
+# Fix #1 – extended status values
+VALID_TEMPLATE_VERSION_STATUSES = {"draft", "in_review", "published", "superseded", "obsolete"}
+IMMUTABLE_TEMPLATE_VERSION_STATUSES = {"published", "superseded", "obsolete"}
+
 
 # ── Permission helper ─────────────────────────────────────────────────────────
 
@@ -43,12 +47,22 @@ async def _has_permission(
     return False
 
 
-# ── Immutability guard ────────────────────────────────────────────────────────
+# ── Immutability guards ───────────────────────────────────────────────────────
 
 def _assert_template_version_mutable(version: ChecklistTemplateVersion) -> None:
     from fastapi import HTTPException
-    if version.status in ("published", "superseded"):
+    if version.status in IMMUTABLE_TEMPLATE_VERSION_STATUSES:
         raise HTTPException(400, f"Checklist template version is '{version.status}' and immutable")
+
+
+# Fix #4 – guard active project checklist versions
+def _assert_project_version_mutable(version: ProjectChecklistTemplateVersion) -> None:
+    from fastapi import HTTPException
+    if version.status in ("active", "approved"):
+        raise HTTPException(
+            400,
+            f"Project checklist version is '{version.status}' and immutable. Create a new version instead."
+        )
 
 
 # ── Schema validation ─────────────────────────────────────────────────────────
@@ -60,7 +74,7 @@ def _parse_schema(schema_json: str) -> list[dict]:
     except Exception:
         raise HTTPException(400, "schema_json must be valid JSON")
     if not isinstance(fields, list):
-        raise HTTPException(400, "schema_json must be a JSON array of field definitions")
+        raise HTTPException(400, "schema_json must be a JSON array")
     for f in fields:
         if "id" not in f or "label" not in f or "field_type" not in f:
             raise HTTPException(400, f"Field missing required keys (id, label, field_type): {f}")
@@ -70,14 +84,10 @@ def _parse_schema(schema_json: str) -> list[dict]:
 
 
 def _validate_answers(
-    schema: list[dict], answers: dict, file_ids_by_field: dict[str, list]
+    schema: list[dict],
+    answers: dict,
+    file_ids_by_field: dict[str, list],
 ) -> list[str]:
-    """
-    Returns list of validation error messages.
-    Checks:
-    - required fields are answered
-    - requires_image fields have at least 1 file_id
-    """
     errors = []
     for field in schema:
         fid = field["id"]
@@ -180,7 +190,7 @@ async def create_template_version(
     template: ChecklistTemplate,
     data: ChecklistTemplateVersionCreate,
 ) -> ChecklistTemplateVersion:
-    _parse_schema(data.schema_json)  # validate
+    _parse_schema(data.schema_json)
     result = await db.execute(
         select(func.max(ChecklistTemplateVersion.version_no))
         .where(ChecklistTemplateVersion.template_id == template.id)
@@ -234,10 +244,9 @@ async def publish_template_version(
     if not await _has_permission(db, tenant_id, published_by, PERMISSION_CHECKLIST_PUBLISH):
         raise HTTPException(403, "Permission denied: checklist_template:publish required")
     _assert_template_version_mutable(version)
-    if version.status != "draft":
+    if version.status not in ("draft", "in_review"):
         raise HTTPException(400, f"Cannot publish version with status '{version.status}'")
 
-    # Supersede previous published
     result = await db.execute(
         select(ChecklistTemplateVersion).where(
             ChecklistTemplateVersion.template_id == version.template_id,
@@ -293,10 +302,10 @@ async def import_checklist_to_project(
     tenant_id: uuid.UUID,
     project_id: uuid.UUID,
     data: ChecklistImportRequest,
+    imported_by: uuid.UUID,
 ) -> tuple[ProjectChecklistTemplate, ProjectChecklistTemplateVersion]:
     from fastapi import HTTPException
 
-    # Load source version
     result = await db.execute(
         select(ChecklistTemplateVersion).where(
             ChecklistTemplateVersion.id == data.checklist_template_version_id,
@@ -309,7 +318,6 @@ async def import_checklist_to_project(
     if source_version.status != "published":
         raise HTTPException(400, "Can only import published checklist template versions")
 
-    # Load parent template for metadata
     result = await db.execute(
         select(ChecklistTemplate).where(ChecklistTemplate.id == source_version.template_id)
     )
@@ -319,10 +327,11 @@ async def import_checklist_to_project(
 
     checklist_no = await generate_project_checklist_no(db, tenant_id, project_id)
 
+    # Fix #2 – source_checklist_template_version_id NOT NULL
     checklist = ProjectChecklistTemplate(
         tenant_id=tenant_id,
         project_id=project_id,
-        source_checklist_template_version_id=source_version.id,
+        source_checklist_template_version_id=source_version.id,  # always set
         checklist_no=checklist_no,
         title=source_template.title,
         category=source_template.category,
@@ -331,17 +340,31 @@ async def import_checklist_to_project(
     db.add(checklist)
     await db.flush()
 
-    # Freeze copy of schema
     version = ProjectChecklistTemplateVersion(
         tenant_id=tenant_id,
         checklist_id=checklist.id,
         version_no=1,
-        schema_json=source_version.schema_json,
+        schema_json=source_version.schema_json,  # deep freeze copy
         change_summary=f"Imported from library {source_template.checklist_no} v{source_version.version_no}",
         status="active",
     )
     db.add(version)
     await db.flush()
+
+    # Fix #7 – audit import
+    from app.core.audit.service import audit
+    await audit(
+        db, tenant_id=tenant_id, user_id=imported_by,
+        action="checklist.imported_to_project",
+        resource_type="project_checklist_template",
+        resource_id=str(checklist.id),
+        detail={
+            "source_version_id": str(source_version.id),
+            "project_id": str(project_id),
+            "checklist_no": checklist_no,
+        },
+    )
+
     await db.refresh(checklist)
     await db.refresh(version)
     return checklist, version
@@ -400,6 +423,7 @@ async def create_run(
     if version.status not in ("active",):
         raise HTTPException(400, f"Cannot run against version with status '{version.status}'")
 
+    # Fix #3 – created_by = run_by on creation
     run = ChecklistRun(
         tenant_id=tenant_id,
         project_id=project_id,
@@ -407,6 +431,7 @@ async def create_run(
         template_version_id=version.id,
         status="open",
         run_by=run_by,
+        submitted_by=None,
     )
     db.add(run)
     await db.flush()
@@ -443,11 +468,22 @@ async def update_run_answers(
     from fastapi import HTTPException
     if run.status != "open":
         raise HTTPException(400, f"Cannot edit run with status '{run.status}'")
-    json.loads(data.answers_json)  # validate JSON
+    json.loads(data.answers_json)
     run.answers_json = data.answers_json
     await db.flush()
     await db.refresh(run)
     return run
+
+
+# Fix #5 – link image file to run via file_links
+async def attach_image_to_run(
+    db: AsyncSession,
+    tenant_id: uuid.UUID,
+    run: ChecklistRun,
+    file_id: uuid.UUID,
+) -> None:
+    from app.core.files.service import link_file
+    await link_file(db, tenant_id, file_id, "checklist_run", run.id)
 
 
 async def submit_run(
@@ -462,18 +498,42 @@ async def submit_run(
     if run.status != "open":
         raise HTTPException(400, f"Cannot submit run with status '{run.status}'")
 
-    # Load schema
     version = await get_project_checklist_version(db, run.template_version_id)
     if not version or not version.schema_json:
         raise HTTPException(400, "Checklist schema not found")
 
     schema = _parse_schema(version.schema_json)
 
-    # Parse and validate answers
     try:
         answers = json.loads(data.answers_json)
     except Exception:
         raise HTTPException(400, "answers_json must be valid JSON")
+
+    # Fix #5 – validate file_links for requires_image fields
+    from app.core.files.models import FileLink
+    for field in schema:
+        if field.get("requires_image"):
+            answer = answers.get(field["id"], {})
+            file_ids_in_answer = answer.get("file_ids", [])
+            if not file_ids_in_answer:
+                raise HTTPException(
+                    422,
+                    f"Field '{field['label']}' requires at least 1 image (file_id missing in answers_json)"
+                )
+            # Verify at least one is actually linked
+            result = await db.execute(
+                select(func.count(FileLink.id)).where(
+                    FileLink.resource_type == "checklist_run",
+                    FileLink.resource_id == run.id,
+                    FileLink.tenant_id == tenant_id,
+                )
+            )
+            linked_count = result.scalar_one() or 0
+            if linked_count == 0:
+                raise HTTPException(
+                    422,
+                    f"Field '{field['label']}' requires at least 1 image linked via file_links"
+                )
 
     errors = _validate_answers(schema, answers, {})
     if errors:
@@ -482,10 +542,12 @@ async def submit_run(
     run.answers_json = data.answers_json
     run.status = "submitted"
     run.submitted_at = datetime.now(timezone.utc)
+    # Fix #3 – submitted_by
+    run.submitted_by = submitted_by
     await db.flush()
 
-    # Auto-create NCs for critical "No" answers
-    await _auto_create_ncs(db, tenant_id, run, schema, answers)
+    # Fix #6 + #7 – idempotent auto-NC with audit
+    await _auto_create_ncs(db, tenant_id, run, schema, answers, submitted_by)
 
     from app.core.audit.service import audit
     await audit(
@@ -505,11 +567,14 @@ async def _auto_create_ncs(
     run: ChecklistRun,
     schema: list[dict],
     answers: dict,
+    submitted_by: uuid.UUID,
 ) -> None:
     from app.core.nonconformance.models import Nonconformance
     from app.core.nonconformance.service import generate_nc_no
+    from app.core.audit.service import audit
 
     owner_user_id = await _resolve_nc_assignee(db, tenant_id, run.project_id)
+    nc_created = []
 
     for field in schema:
         if not field.get("creates_nc_on_no"):
@@ -517,24 +582,51 @@ async def _auto_create_ncs(
         fid = field["id"]
         answer = answers.get(fid, {})
         value = answer.get("value")
-        if str(value).strip().lower() == "no":
-            nc_no = await generate_nc_no(db, tenant_id, run.project_id)
-            nc = Nonconformance(
-                tenant_id=tenant_id,
-                project_id=run.project_id,
-                nc_no=nc_no,
-                title=f"Avvik: {field['label']}",
-                description=f"Automatisk opprettet fra sjekkliste-svar. Felt: {field['label']}",
-                nc_type="nonconformance",
-                severity="low",
-                status="open",
-                source_type="checklist",
-                source_id=run.id,
-                owner_user_id=owner_user_id,
-            )
-            db.add(nc)
+        if str(value).strip().lower() != "no":
+            continue
 
-    await db.flush()
+        # Fix #6 – idempotency: check source_key uniqueness
+        source_key = fid
+        existing = await db.execute(
+            select(Nonconformance).where(
+                Nonconformance.tenant_id == tenant_id,
+                Nonconformance.source_type == "checklist",
+                Nonconformance.source_id == run.id,
+                Nonconformance.source_key == source_key,
+                Nonconformance.is_deleted == False,
+            )
+        )
+        if existing.scalar_one_or_none():
+            continue  # already created – skip
+
+        nc_no = await generate_nc_no(db, tenant_id, run.project_id)
+        nc = Nonconformance(
+            tenant_id=tenant_id,
+            project_id=run.project_id,
+            nc_no=nc_no,
+            title=f"Avvik: {field['label']}",
+            description=f"Automatisk opprettet fra sjekkliste. Felt: {field['label']}",
+            nc_type="nonconformance",
+            severity="low",
+            status="open",
+            source_type="checklist",
+            source_id=run.id,
+            source_key=source_key,
+            owner_user_id=owner_user_id,
+        )
+        db.add(nc)
+        await db.flush()
+        nc_created.append({"nc_no": nc_no, "field_id": fid, "field_label": field["label"]})
+
+    # Fix #7 – audit auto-NC creation
+    if nc_created:
+        await audit(
+            db, tenant_id=tenant_id, user_id=submitted_by,
+            action="checklist_run.auto_nc_created",
+            resource_type="checklist_run",
+            resource_id=str(run.id),
+            detail={"nc_count": len(nc_created), "ncs": nc_created},
+        )
 
 
 async def approve_run(
@@ -546,12 +638,10 @@ async def approve_run(
     from fastapi import HTTPException
     if run.status != "submitted":
         raise HTTPException(400, f"Cannot approve run with status '{run.status}'")
-
     run.status = "approved"
     run.approved_at = datetime.now(timezone.utc)
     run.approved_by = approved_by
     await db.flush()
-
     from app.core.audit.service import audit
     await audit(
         db, tenant_id=tenant_id, user_id=approved_by,
@@ -574,17 +664,13 @@ async def reject_run(
     from fastapi import HTTPException
     if run.status != "submitted":
         raise HTTPException(400, f"Cannot reject run with status '{run.status}'")
-
-    # Transition back to open – same run, editable again
     run.status = "open"
     run.rejected_at = datetime.now(timezone.utc)
     run.rejected_by = rejected_by
     run.rejection_reason = data.reason
-    # Clear approval fields in case of re-review
     run.approved_at = None
     run.approved_by = None
     await db.flush()
-
     from app.core.audit.service import audit
     await audit(
         db, tenant_id=tenant_id, user_id=rejected_by,
