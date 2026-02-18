@@ -3,7 +3,16 @@ from datetime import datetime, timezone
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.nonconformance.models import Nonconformance, CapaAction
-from app.core.nonconformance.schemas import NonconformanceCreate, NonconformanceUpdate, CapaActionCreate, CapaActionUpdate
+from app.core.nonconformance.schemas import (
+    NonconformanceCreate, NonconformanceUpdate,
+    CapaActionCreate, CapaActionUpdate,
+)
+
+CAPA_VALID_TRANSITIONS = {
+    "open": ["done"],
+    "done": ["verified"],
+    "verified": [],
+}
 
 
 async def generate_nc_no(db: AsyncSession, tenant_id: uuid.UUID, project_id: uuid.UUID) -> str:
@@ -35,7 +44,7 @@ async def create_nc(
         nc_type=data.nc_type,
         severity=data.severity,
         status="open",
-        assigned_to=data.assigned_to,
+        owner_user_id=data.owner_user_id,
         source_type=data.source_type,
         source_id=data.source_id,
     )
@@ -52,12 +61,14 @@ async def create_nc_from_incident(
     project_id: uuid.UUID,
     title: str,
     description: str | None,
+    owner_user_id: uuid.UUID | None,
 ) -> Nonconformance:
     data = NonconformanceCreate(
         title=title,
         description=description,
         source_type="incident",
         source_id=incident_id,
+        owner_user_id=owner_user_id,
     )
     return await create_nc(db, tenant_id, project_id, data)
 
@@ -80,10 +91,31 @@ async def list_ncs(db: AsyncSession, tenant_id: uuid.UUID, project_id: uuid.UUID
     return list(result.scalars().all())
 
 
-async def update_nc(db: AsyncSession, nc: Nonconformance, data: NonconformanceUpdate) -> Nonconformance:
+async def update_nc(
+    db: AsyncSession,
+    nc: Nonconformance,
+    data: NonconformanceUpdate,
+    updated_by: uuid.UUID,
+    tenant_id: uuid.UUID,
+) -> Nonconformance:
+    old_owner = nc.owner_user_id
     for field, value in data.model_dump(exclude_none=True).items():
         setattr(nc, field, value)
     await db.flush()
+
+    # Audit ownership change
+    if data.owner_user_id is not None and data.owner_user_id != old_owner:
+        from app.core.audit.service import audit
+        await audit(
+            db,
+            tenant_id=tenant_id,
+            user_id=updated_by,
+            action="nc.owner_changed",
+            resource_type="nonconformance",
+            resource_id=str(nc.id),
+            detail={"old_owner": str(old_owner), "new_owner": str(data.owner_user_id)},
+        )
+
     await db.refresh(nc)
     return nc
 
@@ -107,6 +139,44 @@ async def create_capa(
     )
     db.add(action)
     await db.flush()
+    await db.refresh(action)
+    return action
+
+
+async def transition_capa(
+    db: AsyncSession,
+    action: CapaAction,
+    to_status: str,
+    user_id: uuid.UUID,
+    tenant_id: uuid.UUID,
+) -> CapaAction:
+    from fastapi import HTTPException
+    allowed = CAPA_VALID_TRANSITIONS.get(action.status, [])
+    if to_status not in allowed:
+        raise HTTPException(400, f"Cannot transition CAPA from '{action.status}' to '{to_status}'")
+
+    now_iso = datetime.now(timezone.utc).isoformat()
+    action.status = to_status
+
+    if to_status == "done":
+        action.done_at = now_iso
+    elif to_status == "verified":
+        action.verified_at = now_iso
+        action.verified_by = user_id
+
+    await db.flush()
+
+    from app.core.audit.service import audit
+    await audit(
+        db,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        action=f"capa.{to_status}",
+        resource_type="capa_action",
+        resource_id=str(action.id),
+        detail={"new_status": to_status},
+    )
+
     await db.refresh(action)
     return action
 

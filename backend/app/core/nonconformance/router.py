@@ -1,10 +1,11 @@
 import uuid
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.nonconformance import service
 from app.core.nonconformance.schemas import (
     NonconformanceCreate, NonconformanceRead, NonconformanceUpdate,
-    CapaActionCreate, CapaActionRead, CapaActionUpdate,
+    CapaActionCreate, CapaActionRead, CapaActionUpdate, CapaTransitionRequest,
 )
 from app.core.projects.service import get_project
 from app.dependencies import get_db, get_current_user, CurrentUser
@@ -22,6 +23,8 @@ async def create_nc(
     project = await get_project(db, project_id)
     if not project:
         raise HTTPException(404, "Project not found")
+    if data.owner_user_id is None:
+        data.owner_user_id = current.user_id
     return await service.create_nc(db, current.tenant_id, project_id, data)
 
 
@@ -51,12 +54,12 @@ async def update_nc(
     nc_id: uuid.UUID,
     data: NonconformanceUpdate,
     db: AsyncSession = Depends(get_db),
-    _: CurrentUser = Depends(get_current_user),
+    current: CurrentUser = Depends(get_current_user),
 ):
     nc = await service.get_nc(db, nc_id)
     if not nc:
         raise HTTPException(404, "Nonconformance not found")
-    return await service.update_nc(db, nc, data)
+    return await service.update_nc(db, nc, data, current.user_id, current.tenant_id)
 
 
 @router.post("/nonconformances/{nc_id}/actions", response_model=CapaActionRead, status_code=201)
@@ -89,12 +92,37 @@ async def update_capa(
     db: AsyncSession = Depends(get_db),
     _: CurrentUser = Depends(get_current_user),
 ):
-    from sqlalchemy import select
     from app.core.nonconformance.models import CapaAction
     result = await db.execute(
-        select(CapaAction).where(CapaAction.id == action_id, CapaAction.nonconformance_id == nc_id, CapaAction.is_deleted == False)
+        select(CapaAction).where(
+            CapaAction.id == action_id,
+            CapaAction.nonconformance_id == nc_id,
+            CapaAction.is_deleted == False,
+        )
     )
     action = result.scalar_one_or_none()
     if not action:
         raise HTTPException(404, "Action not found")
     return await service.update_capa(db, action, data)
+
+
+@router.post("/nonconformances/{nc_id}/actions/{action_id}/transition", response_model=CapaActionRead)
+async def transition_capa(
+    nc_id: uuid.UUID,
+    action_id: uuid.UUID,
+    data: CapaTransitionRequest,
+    db: AsyncSession = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+):
+    from app.core.nonconformance.models import CapaAction
+    result = await db.execute(
+        select(CapaAction).where(
+            CapaAction.id == action_id,
+            CapaAction.nonconformance_id == nc_id,
+            CapaAction.is_deleted == False,
+        )
+    )
+    action = result.scalar_one_or_none()
+    if not action:
+        raise HTTPException(404, "Action not found")
+    return await service.transition_capa(db, action, data.to_status, current.user_id, current.tenant_id)

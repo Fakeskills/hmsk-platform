@@ -10,7 +10,11 @@ class Incident(Base, TimestampMixin, SoftDeleteMixin, TenantScopedMixin):
     """
     RUH – Rapport om Uønsket Hendelse.
     status flow: draft -> submitted -> triage -> open -> closed
-    anonymous=True hides reporter identity from non-admin users.
+
+    Anonymity model:
+      reporter_visibility: 'named' | 'anonymous'
+      reporter_user_id_internal: always set (real user, never exposed unless revealed)
+      reporter_user_id_visible: NULL if anonymous, else equals internal
     """
     __tablename__ = "incidents"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -18,11 +22,14 @@ class Incident(Base, TimestampMixin, SoftDeleteMixin, TenantScopedMixin):
     incident_no: Mapped[str] = mapped_column(String(30), nullable=False)
     title: Mapped[str] = mapped_column(String(500), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    incident_type: Mapped[str] = mapped_column(String(50), nullable=False, default="ruh")  # ruh | near_miss | injury | observation
-    severity: Mapped[str] = mapped_column(String(50), nullable=False, default="low")  # low | medium | high | critical
+    incident_type: Mapped[str] = mapped_column(String(50), nullable=False, default="ruh")
+    severity: Mapped[str] = mapped_column(String(50), nullable=False, default="low")
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="draft")
-    anonymous: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    reported_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    # Anonymity fields
+    reporter_visibility: Mapped[str] = mapped_column(String(20), nullable=False, default="named")
+    reporter_user_id_internal: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    reporter_user_id_visible: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Operations
     assigned_to: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     occurred_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     location: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -30,11 +37,10 @@ class Incident(Base, TimestampMixin, SoftDeleteMixin, TenantScopedMixin):
 
 
 class IncidentMessage(Base, TimestampMixin, SoftDeleteMixin, TenantScopedMixin):
-    """2-way messaging thread on an incident."""
     __tablename__ = "incident_messages"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     incident_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("incidents.id", ondelete="CASCADE"), nullable=False, index=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     sender_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
-    is_internal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # internal = only visible to admin/HS
+    is_internal: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     incident: Mapped["Incident"] = relationship(back_populates="messages")

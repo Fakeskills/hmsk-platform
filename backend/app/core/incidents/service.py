@@ -1,16 +1,21 @@
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.incidents.models import Incident, IncidentMessage
 from app.core.incidents.schemas import IncidentCreate, IncidentMessageCreate, IncidentTriageUpdate
 
 
-# ── Sequence ──────────────────────────────────────────────────────────────────
+VALID_TRANSITIONS = {
+    "draft": ["submitted"],
+    "submitted": ["triage"],
+    "triage": ["open"],
+    "open": ["closed"],
+    "closed": [],
+}
+
 
 async def generate_incident_no(db: AsyncSession, tenant_id: uuid.UUID, project_id: uuid.UUID) -> str:
-    """Format: RUH-YY-#### per project."""
-    from sqlalchemy import func
     year = datetime.now(timezone.utc).year
     yy = str(year)[-2:]
     result = await db.execute(
@@ -23,8 +28,6 @@ async def generate_incident_no(db: AsyncSession, tenant_id: uuid.UUID, project_i
     return f"RUH-{yy}-{count + 1:04d}"
 
 
-# ── CRUD ──────────────────────────────────────────────────────────────────────
-
 async def create_incident(
     db: AsyncSession,
     tenant_id: uuid.UUID,
@@ -33,7 +36,16 @@ async def create_incident(
     reported_by: uuid.UUID | None,
 ) -> Incident:
     incident_no = await generate_incident_no(db, tenant_id, project_id)
-    reporter = None if data.anonymous else reported_by
+
+    if data.anonymous:
+        reporter_visibility = "anonymous"
+        reporter_user_id_internal = reported_by
+        reporter_user_id_visible = None
+    else:
+        reporter_visibility = "named"
+        reporter_user_id_internal = reported_by
+        reporter_user_id_visible = reported_by
+
     incident = Incident(
         tenant_id=tenant_id,
         project_id=project_id,
@@ -43,8 +55,9 @@ async def create_incident(
         incident_type=data.incident_type,
         severity=data.severity,
         status="draft",
-        anonymous=data.anonymous,
-        reported_by=reporter,
+        reporter_visibility=reporter_visibility,
+        reporter_user_id_internal=reporter_user_id_internal,
+        reporter_user_id_visible=reporter_user_id_visible,
         occurred_at=data.occurred_at,
         location=data.location,
     )
@@ -72,17 +85,6 @@ async def list_incidents(db: AsyncSession, tenant_id: uuid.UUID, project_id: uui
     return list(result.scalars().all())
 
 
-# ── Status transitions ────────────────────────────────────────────────────────
-
-VALID_TRANSITIONS = {
-    "draft": ["submitted"],
-    "submitted": ["triage"],
-    "triage": ["open"],
-    "open": ["closed"],
-    "closed": [],
-}
-
-
 async def transition_incident(db: AsyncSession, incident: Incident, to_status: str) -> Incident:
     from fastapi import HTTPException
     allowed = VALID_TRANSITIONS.get(incident.status, [])
@@ -104,7 +106,32 @@ async def triage_incident(db: AsyncSession, incident: Incident, data: IncidentTr
     return incident
 
 
-# ── Messages ──────────────────────────────────────────────────────────────────
+async def reveal_reporter(
+    db: AsyncSession,
+    incident: Incident,
+    revealed_by: uuid.UUID,
+    tenant_id: uuid.UUID,
+) -> Incident:
+    from fastapi import HTTPException
+    if incident.reporter_visibility == "named":
+        raise HTTPException(400, "Reporter is already visible")
+    incident.reporter_user_id_visible = incident.reporter_user_id_internal
+    incident.reporter_visibility = "named"
+    await db.flush()
+    # Audit log
+    from app.core.audit.service import audit
+    await audit(
+        db,
+        tenant_id=tenant_id,
+        user_id=revealed_by,
+        action="incident.reveal_reporter",
+        resource_type="incident",
+        resource_id=str(incident.id),
+        detail={"incident_no": incident.incident_no},
+    )
+    await db.refresh(incident)
+    return incident
+
 
 async def add_message(
     db: AsyncSession,
@@ -126,7 +153,9 @@ async def add_message(
     return msg
 
 
-async def list_messages(db: AsyncSession, tenant_id: uuid.UUID, incident_id: uuid.UUID) -> list[IncidentMessage]:
+async def list_messages(
+    db: AsyncSession, tenant_id: uuid.UUID, incident_id: uuid.UUID
+) -> list[IncidentMessage]:
     result = await db.execute(
         select(IncidentMessage).where(
             IncidentMessage.incident_id == incident_id,

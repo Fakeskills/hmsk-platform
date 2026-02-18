@@ -83,10 +83,21 @@ async def close_incident(
     incident = await service.get_incident(db, incident_id)
     if not incident:
         raise HTTPException(404, "Incident not found")
-    # Allow close from triage or open
     if incident.status == "triage":
         await service.transition_incident(db, incident, "open")
     return await service.transition_incident(db, incident, "closed")
+
+
+@router.post("/incidents/{incident_id}/reveal-reporter", response_model=IncidentRead)
+async def reveal_reporter(
+    incident_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current: CurrentUser = Depends(get_current_user),
+):
+    incident = await service.get_incident(db, incident_id)
+    if not incident:
+        raise HTTPException(404, "Incident not found")
+    return await service.reveal_reporter(db, incident, current.user_id, current.tenant_id)
 
 
 @router.post("/incidents/{incident_id}/messages", response_model=IncidentMessageRead, status_code=201)
@@ -140,5 +151,6 @@ async def create_nc_from_incident(
     nc = await create_nc_from_incident(
         db, current.tenant_id, incident_id,
         incident.project_id, incident.title, incident.description,
+        owner_user_id=current.user_id,
     )
     return NonconformanceRead.model_validate(nc)
