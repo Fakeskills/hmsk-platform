@@ -9,6 +9,7 @@ from app.core.inbox.router import router as inbox_router
 from app.core.tasks.router import router as tasks_router
 from app.core.incidents.router import router as incidents_router
 from app.core.nonconformance.router import router as nc_router
+from app.core.documents.router import router as documents_router
 from app.settings import get_settings
 
 settings = get_settings()
@@ -16,7 +17,7 @@ settings = get_settings()
 def create_app() -> FastAPI:
     app = FastAPI(
         title="HMSK Platform API",
-        version="0.3.0",
+        version="0.4.0",
         docs_url="/docs" if settings.APP_DEBUG else None,
         redoc_url="/redoc" if settings.APP_DEBUG else None,
     )
@@ -36,6 +37,7 @@ def create_app() -> FastAPI:
     app.include_router(tasks_router)
     app.include_router(incidents_router)
     app.include_router(nc_router)
+    app.include_router(documents_router)
 
     @app.get("/health")
     async def health():
